@@ -1,0 +1,51 @@
+# Local backing services.
+#
+#   docker compose up -d
+#   npm run db:migrate
+#   npm run db:seed
+#
+# postgres  the catalogue, accounts and audit trail for `DATA_DRIVER=postgres`.
+#           The image bundles pgvector; plain `postgres:16` does not, and the
+#           migration that creates the extension will fail against it.
+# redis     the shared rate-limit buckets for `REDIS_URL`. Optional — without
+#           it the limiter counts in-process, which is correct for one instance.
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: sourcely-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: sourcely
+      POSTGRES_PASSWORD: sourcely
+      POSTGRES_DB: sourcely
+      # Deterministic collation, so ORDER BY on text is stable across machines.
+      POSTGRES_INITDB_ARGS: '--locale=C --encoding=UTF8'
+    ports:
+      - '5432:5432'
+    volumes:
+      - sourcely-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U sourcely -d sourcely']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    container_name: sourcely-redis
+    restart: unless-stopped
+    # Rate-limit buckets are reconstructible state: losing them on restart
+    # costs one window of enforcement, so persistence buys nothing and an
+    # fsync on every token spend would be the most expensive thing here.
+    command: ['redis-server', '--save', '', '--appendonly', 'no', '--maxmemory', '128mb', '--maxmemory-policy', 'allkeys-lru']
+    ports:
+      - '6379:6379'
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  sourcely-pgdata:

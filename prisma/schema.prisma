@@ -1,0 +1,635 @@
+// Sourcely — PostgreSQL schema.
+//
+// The production persistence model behind `DATA_DRIVER=postgres`. It mirrors
+// the domain contracts in src/lib/domain/ exactly; the memory driver and this
+// one are two implementations of the same repository interfaces, so a page
+// cannot tell them apart.
+//
+// Two decisions carried over from ARCHITECTURE.md:
+//
+//   §2.2  ProductSpec is a typed EAV side table, not a JSON column. A valve has
+//         connection_size, a breaker has breaking_capacity_ka; one wide table is
+//         impossible and opaque JSON kills range filters and faceting.
+//   §2.4  Cursor pagination everywhere, composite indexes on the real access
+//         paths, and embeddings written by a background job rather than inline.
+
+generator client {
+  provider        = "prisma-client-js"
+  output          = "../node_modules/.prisma/client"
+  previewFeatures = ["postgresqlExtensions"]
+}
+
+datasource db {
+  provider   = "postgresql"
+  url        = env("DATABASE_URL")
+  extensions = [pgvector(map: "vector")]
+}
+
+/* -------------------------------------------------------------------------- */
+/* Taxonomy                                                                   */
+/* -------------------------------------------------------------------------- */
+
+model Category {
+  id          String  @id
+  key         String  @unique
+  slug        String  @unique
+  name        String
+  description String  @db.Text
+  icon        String
+  featured    Boolean @default(false)
+  sortOrder   Int     @default(0)
+
+  parentId String?
+  parent   Category?  @relation("CategoryTree", fields: [parentId], references: [id], onDelete: Restrict)
+  children Category[] @relation("CategoryTree")
+
+  // Denormalised, refreshed on product write. Reading it is one of the hottest
+  // paths on the site; recomputing it per request is not affordable.
+  productCount Int @default(0)
+
+  products      Product[] @relation("ProductCategory")
+  subcategoryOf Product[] @relation("ProductSubcategory")
+
+  @@index([parentId, sortOrder])
+  @@map("categories")
+}
+
+model Brand {
+  id           String    @id
+  key          String    @unique
+  slug         String    @unique
+  name         String
+  country      String
+  description  String    @db.Text
+  productCount Int       @default(0)
+  products     Product[]
+
+  @@map("brands")
+}
+
+model Seller {
+  id       String  @id
+  key      String  @unique
+  name     String
+  city     String
+  state    String
+  gstin    String
+  verified Boolean @default(false)
+
+  // Both feed the sellerTrust component of the ranking model.
+  fulfilmentRate Float @default(0.9)
+  responseHours  Int   @default(24)
+  since          Int
+
+  products Product[]
+
+  @@map("sellers")
+}
+
+/* -------------------------------------------------------------------------- */
+/* Catalogue                                                                  */
+/* -------------------------------------------------------------------------- */
+
+enum ProductStatus {
+  active
+  draft
+  archived
+}
+
+enum AvailabilityState {
+  out_of_stock
+  made_to_order
+  low_stock
+  in_stock
+}
+
+model Product {
+  id               String  @id
+  slug             String  @unique
+  sku              String  @unique
+  name             String
+  shortDescription String  @db.Text
+  description      String  @db.Text
+
+  categoryId    String
+  category      Category  @relation("ProductCategory", fields: [categoryId], references: [id], onDelete: Restrict)
+  subcategoryId String?
+  subcategory   Category? @relation("ProductSubcategory", fields: [subcategoryId], references: [id], onDelete: SetNull)
+  brandId       String
+  brand         Brand     @relation(fields: [brandId], references: [id], onDelete: Restrict)
+  sellerId      String
+  seller        Seller    @relation(fields: [sellerId], references: [id], onDelete: Restrict)
+
+  // Whole rupees. Integer arithmetic keeps range filters and band scoring exact
+  // — a float price makes "under ₹5,000" ambiguous at the boundary.
+  price          Int
+  listPrice      Int?
+  currency       String @default("INR")
+  priceUnit      String @default("per unit")
+  taxRatePercent Float  @default(18)
+
+  status ProductStatus @default(draft)
+
+  availabilityState AvailabilityState @default(in_stock)
+  quantityOnHand    Int?
+  leadTimeDays      Int?
+  minOrderQuantity  Int               @default(1)
+  unit              String            @default("unit")
+
+  applications   String[]
+  industries     String[]
+  tags           String[]
+  certifications String[]
+
+  warrantyMonths Int?
+  ratingAverage  Float?
+  ratingCount    Int    @default(0)
+
+  viewCount Int @default(0)
+  rfqCount  Int @default(0)
+  saveCount Int @default(0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  specs     ProductSpec[]
+  images    ProductImage[]
+  documents ProductDocument[]
+  embedding ProductEmbedding?
+
+  relatedTo   ProductRelation[] @relation("RelationSource")
+  relatedFrom ProductRelation[] @relation("RelationTarget")
+
+  savedBy   SavedProduct[]
+  views     ProductViewEvent[]
+  rfqItems  RfqItem[]
+
+  // The real access paths: a filtered category listing sorted by price, a
+  // brand page, and a seller's own catalogue.
+  @@index([categoryId, status, price])
+  @@index([brandId, status])
+  @@index([sellerId, status])
+  @@index([status, updatedAt])
+  @@map("products")
+}
+
+enum SpecDataType {
+  enumeration
+  text
+  number
+  boolean
+}
+
+/// Typed attribute values. `valueNumber` is what makes range filters and
+/// numeric scoring possible; `displayValue` is pre-rendered and never parsed.
+model ProductSpec {
+  id        String  @id @default(cuid())
+  productId String
+  product   Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  key          String
+  dataType     SpecDataType
+  valueText    String?
+  valueNumber  Float?
+  valueBool    Boolean?
+  unit         String?
+  displayValue String
+
+  @@unique([productId, key])
+  // Faceting reads by key; range filters read by key and numeric value.
+  @@index([key, valueText])
+  @@index([key, valueNumber])
+  @@map("product_specs")
+}
+
+model ProductImage {
+  id        String  @id @default(cuid())
+  productId String
+  product   Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  url         String
+  alt         String
+  width       Int
+  height      Int
+  blurDataUrl String?
+  position    Int     @default(0)
+
+  @@index([productId, position])
+  @@map("product_images")
+}
+
+enum DocumentKind {
+  datasheet
+  certificate
+  manual
+  cad
+  warranty
+}
+
+model ProductDocument {
+  id        String  @id @default(cuid())
+  productId String
+  product   Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  kind   DocumentKind
+  title  String
+  url    String
+  sizeKb Int
+  format String
+
+  @@index([productId])
+  @@map("product_documents")
+}
+
+/// Written by a background job on product change, never inline on a request —
+/// embedding generation is the slowest thing in the write path.
+model ProductEmbedding {
+  productId String  @id
+  product   Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  /// 256 dimensions, matching EMBEDDING_DIM in src/server/catalog/vector.ts.
+  /// An ivfflat index is created by migration SQL — Prisma cannot express it.
+  vector    Unsupported("vector(256)")
+  model     String                     @default("offline-hashed-v1")
+  updatedAt DateTime                   @updatedAt
+
+  @@map("product_embeddings")
+}
+
+model ProductRelation {
+  sourceId String
+  source   Product @relation("RelationSource", fields: [sourceId], references: [id], onDelete: Cascade)
+  targetId String
+  target   Product @relation("RelationTarget", fields: [targetId], references: [id], onDelete: Cascade)
+  position Int     @default(0)
+
+  @@id([sourceId, targetId])
+  @@map("product_relations")
+}
+
+/* -------------------------------------------------------------------------- */
+/* Identity                                                                   */
+/* -------------------------------------------------------------------------- */
+
+enum Role {
+  customer
+  staff
+  admin
+}
+
+model User {
+  id    String @id @default(cuid())
+  email String @unique
+  name  String
+  role  Role   @default(customer)
+
+  /// bcrypt cost 12. Never selected into a domain type — see UserRecord.
+  passwordHash String
+
+  company       String?
+  phone         String?
+  city          String?
+  gstin         String?
+  avatarUrl     String?
+  emailVerified Boolean @default(false)
+
+  createdAt    DateTime @default(now())
+  lastActiveAt DateTime @default(now())
+
+  sessions      Session[]
+  resetTokens   PasswordResetToken[]
+  savedProducts SavedProduct[]
+  savedSearches SavedSearch[]
+  views         ProductViewEvent[]
+  searchEvents  SearchEvent[]
+  notifications Notification[]
+  rfqs          Rfq[]
+  conversations Conversation[]
+  auditEntries  AuditLogEntry[]
+
+  @@index([role, lastActiveAt])
+  @@map("users")
+}
+
+/// Server-side session records. The signed cookie proves the bearer
+/// authenticated; this row decides whether that is still true, which is what
+/// makes sign-out take effect immediately rather than at token expiry.
+model Session {
+  id     String @id @default(cuid())
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  createdAt  DateTime  @default(now())
+  expiresAt  DateTime
+  lastSeenAt DateTime  @default(now())
+  userAgent  String
+  ipHash     String?
+  revokedAt  DateTime?
+
+  @@index([userId, revokedAt])
+  @@index([expiresAt])
+  @@map("sessions")
+}
+
+/// Only the SHA-256 hash is stored. A stolen dump must not hand the thief a
+/// working reset link for every account.
+model PasswordResetToken {
+  tokenHash String    @id
+  userId    String
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  expiresAt DateTime
+  usedAt    DateTime?
+
+  @@index([userId, usedAt])
+  @@map("password_reset_tokens")
+}
+
+/* -------------------------------------------------------------------------- */
+/* Buyer activity                                                             */
+/* -------------------------------------------------------------------------- */
+
+model SavedProduct {
+  id        String  @id @default(cuid())
+  userId    String
+  user      User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  productId String
+  product   Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  note      String?
+  createdAt DateTime @default(now())
+
+  @@unique([userId, productId])
+  @@index([userId, createdAt])
+  @@map("saved_products")
+}
+
+model SavedSearch {
+  id     String @id @default(cuid())
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  title           String
+  query           String
+  /// Parsed SearchIntent, or null when saved from a keyword search.
+  intent          Json?
+  alertsEnabled   Boolean  @default(false)
+  lastResultCount Int      @default(0)
+  createdAt       DateTime @default(now())
+
+  @@index([userId, createdAt])
+  @@index([alertsEnabled])
+  @@map("saved_searches")
+}
+
+model ProductViewEvent {
+  id        String  @id @default(cuid())
+  userId    String?
+  user      User?   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  visitorId String
+  productId String
+  product   Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  viewedAt DateTime @default(now())
+
+  // One row per identity per product; a repeat view updates the timestamp.
+  @@unique([userId, productId])
+  @@index([visitorId, viewedAt])
+  @@index([productId, viewedAt])
+  @@map("product_views")
+}
+
+enum SearchMode {
+  traditional
+  ai
+}
+
+/// The analytics spine. Every metric in the admin area is derived from these
+/// rows — nothing is a separately maintained counter that can drift.
+model SearchEvent {
+  id        String  @id @default(cuid())
+  userId    String?
+  user      User?   @relation(fields: [userId], references: [id], onDelete: SetNull)
+  sessionId String
+
+  query             String
+  mode              SearchMode
+  intent            Json?
+  resultCount       Int
+  clickedProductIds String[]
+  convertedToRfq    Boolean    @default(false)
+  tookMs            Int
+
+  createdAt DateTime @default(now())
+
+  @@index([createdAt])
+  @@index([userId, createdAt])
+  @@index([resultCount])
+  @@map("search_events")
+}
+
+enum NotificationKind {
+  rfq_status
+  rfq_message
+  price_drop
+  back_in_stock
+  saved_search_hit
+  account
+  system
+}
+
+model Notification {
+  id     String @id @default(cuid())
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  kind      NotificationKind
+  title     String
+  body      String           @db.Text
+  href      String?
+  read      Boolean          @default(false)
+  /// Set once the mailer has delivered it; null means in-app only.
+  emailedAt DateTime?
+  createdAt DateTime         @default(now())
+
+  @@index([userId, read, createdAt])
+  @@map("notifications")
+}
+
+/* -------------------------------------------------------------------------- */
+/* Quotations                                                                 */
+/* -------------------------------------------------------------------------- */
+
+enum RfqStatus {
+  draft
+  submitted
+  under_review
+  quoted
+  negotiating
+  accepted
+  declined
+  expired
+}
+
+model Rfq {
+  id        String @id @default(cuid())
+  /// Human-quotable: buyers read this out on the phone.
+  reference String @unique
+
+  userId String?
+  user   User?   @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  status RfqStatus @default(submitted)
+
+  contactName    String
+  contactCompany String
+  contactEmail   String
+  contactPhone   String
+  contactCity    String
+  contactGstin   String?
+
+  requirements    String    @db.Text
+  deliveryPincode String?
+  requiredByDate  DateTime?
+
+  sourceConversationId String?
+
+  /// Always derived from the line items, never written directly.
+  quotedTotal Int?
+  validUntil  DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  items    RfqItem[]
+  messages RfqMessage[]
+
+  @@index([status, updatedAt])
+  @@index([userId, createdAt])
+  @@map("rfqs")
+}
+
+model RfqItem {
+  id        String  @id @default(cuid())
+  rfqId     String
+  rfq       Rfq     @relation(fields: [rfqId], references: [id], onDelete: Cascade)
+  productId String
+  product   Product @relation(fields: [productId], references: [id], onDelete: Restrict)
+
+  quantity            Int
+  note                String?
+  quotedUnitPrice     Int?
+  quotedLeadTimeDays  Int?
+
+  @@unique([rfqId, productId])
+  @@index([productId])
+  @@map("rfq_items")
+}
+
+model RfqMessage {
+  id     String @id @default(cuid())
+  rfqId  String
+  rfq    Rfq    @relation(fields: [rfqId], references: [id], onDelete: Cascade)
+
+  authorId   String
+  authorRole Role
+  body       String   @db.Text
+  createdAt  DateTime @default(now())
+
+  @@index([rfqId, createdAt])
+  @@map("rfq_messages")
+}
+
+/* -------------------------------------------------------------------------- */
+/* Assistant                                                                  */
+/* -------------------------------------------------------------------------- */
+
+model Conversation {
+  id     String  @id @default(cuid())
+  userId String?
+  user   User?   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  title     String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  messages ConversationMessage[]
+
+  @@index([userId, updatedAt])
+  @@map("conversations")
+}
+
+model ConversationMessage {
+  id             String       @id
+  conversationId String
+  conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+
+  role    String
+  content String @db.Text
+
+  /// The parsed SearchIntent for this turn. Read back to refine the next one —
+  /// the client never supplies an intent.
+  intent       Json?
+  /// Ranked results as rendered. Stored so a conversation replays exactly.
+  results      Json?
+  followUp     Json?
+  totalMatches Int?
+
+  createdAt DateTime @default(now())
+
+  @@index([conversationId, createdAt])
+  @@map("conversation_messages")
+}
+
+/* -------------------------------------------------------------------------- */
+/* Audit                                                                      */
+/* -------------------------------------------------------------------------- */
+
+enum AuditAction {
+  product_create
+  product_update
+  product_status_change
+  rfq_status_change
+  rfq_quote
+  rfq_message
+  user_role_change
+  session_revoke
+  password_change
+  password_reset
+  login_success
+  login_failure
+  export
+  upload
+}
+
+/// Append-only record of privileged actions.
+///
+/// Deliberately has no update or delete path in the repository interface: an
+/// audit log an operator can edit is not an audit log. Retention is enforced by
+/// a scheduled job, not by application code.
+model AuditLogEntry {
+  id String @id @default(cuid())
+
+  actorId    String?
+  actor      User?   @relation(fields: [actorId], references: [id], onDelete: SetNull)
+  actorEmail String
+  actorRole  Role
+
+  action     AuditAction
+  /// Type and id of what was acted on, e.g. "product" / "prod_vtk-bv2s-050".
+  targetType String
+  targetId   String
+  summary    String
+
+  /// Before/after for the fields that changed. Never the whole record.
+  changes Json?
+
+  ipHash    String?
+  userAgent String?
+  createdAt DateTime @default(now())
+
+  @@index([createdAt])
+  @@index([actorId, createdAt])
+  @@index([targetType, targetId, createdAt])
+  @@index([action, createdAt])
+  @@map("audit_log")
+}
