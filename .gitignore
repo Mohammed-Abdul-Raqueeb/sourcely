@@ -1,0 +1,17 @@
+node_modules/
+.next/
+out/
+build/
+.env
+.env.local
+.env*.local
+.data/
+.data-test/
+.data-vitest/
+*.tsbuildinfo
+next-env.d.ts
+.DS_Store
+Thumbs.db
+coverage/
+# Generated render previews — reproducible via `npm run images:generate -- --preview`
+scripts/product-renders/preview/
