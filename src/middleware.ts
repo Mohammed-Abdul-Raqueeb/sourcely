@@ -130,6 +130,19 @@ const NONCE_PREFIXES = [
 
 const IS_DEV = process.env.NODE_ENV === 'development'
 
+/**
+ * When uploads live in Vercel Blob, `/api/media/…` answers with a redirect to
+ * the store's CDN. CSP checks every hop of a redirect chain, so the CDN host
+ * must be allowed in img-src whenever that driver is active — and only then,
+ * so a deployment that never redirects grants nothing extra. Mirrors the
+ * driver selection in src/server/uploads/storage.ts.
+ */
+const BLOB_IMG_SRC =
+  Boolean(process.env.BLOB_READ_WRITE_TOKEN) ||
+  process.env.UPLOAD_DRIVER?.toLowerCase() === 'blob'
+    ? ' https://*.public.blob.vercel-storage.com'
+    : ''
+
 function contentSecurityPolicy(nonce: string | null, isHttps: boolean): string {
   const script = nonce
     ? [`'nonce-${nonce}'`, "'self'"]
@@ -148,7 +161,7 @@ function contentSecurityPolicy(nonce: string | null, isHttps: boolean): string {
     // primitive.
     "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
     "font-src 'self' https://fonts.gstatic.com data:",
-    "img-src 'self' data: blob: https://images.unsplash.com",
+    `img-src 'self' data: blob: https://images.unsplash.com${BLOB_IMG_SRC}`,
     `connect-src 'self'${IS_DEV ? ' ws: wss:' : ''}`,
     "frame-ancestors 'none'",
     "base-uri 'self'",
