@@ -21,15 +21,21 @@ Neither is created automatically; no provider is assumed or hard-coded.
 1. **PostgreSQL** — any provider reachable from Vercel that can run
    `CREATE EXTENSION vector` (pgvector) and `pg_trgm`. The migrations create
    both extensions; if the provider does not ship pgvector, migration fails.
-   Prefer the provider's **pooled** connection string if one is offered —
-   serverless functions open many short-lived connections. If only a direct
-   connection is available, append `?connection_limit=8&connect_timeout=15`
-   to `DATABASE_URL`: the build prerenders pages in parallel worker
+
+   Use the provider's **direct (unpooled)** connection string as
+   `DATABASE_URL`: every deploy runs `prisma migrate deploy` against it, and
+   Prisma Migrate requires a direct connection — transaction-mode poolers
+   (PgBouncer, e.g. Neon's `-pooler` host) break its advisory locks. On Neon,
+   that is the string labelled “Direct connection”, not the pooled one.
+
+   Then append `?connection_limit=8&connect_timeout=15` (after `sslmode` if
+   present, joined with `&`): the build prerenders pages in parallel worker
    processes, each with its own Prisma pool, and unbounded pools across
    workers can exhaust the server's `max_connections` — a failure that reads
    as “Can't reach database server” midway through `Generating static pages`.
    (Verified against a 100-connection server: the unbounded build fails, the
-   bounded one passes.)
+   bounded one passes.) The same cap keeps runtime functions well inside a
+   small provider plan's connection budget.
 2. **Vercel Blob** — Vercel dashboard → Storage → Blob → create a store and
    connect it to the project. Connecting it injects `BLOB_READ_WRITE_TOKEN`
    into the project environment automatically.
