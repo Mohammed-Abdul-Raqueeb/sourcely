@@ -24,7 +24,28 @@ export async function GET(
     return new Response('Not found', { status: 404 })
   }
 
-  const data = await getUploadStorage().get(key)
+  const storage = getUploadStorage()
+
+  // An object store serves its own traffic from a CDN; proxying every image
+  // through this function would double the bandwidth and add latency for
+  // nothing. The key is content-addressed, so the target can never change
+  // meaning — the redirect is still capped at a day rather than marked
+  // immutable, so a store migration does not fight year-old cached redirects.
+  if (storage.publicUrl) {
+    const url = await storage.publicUrl(key)
+    if (!url) return new Response('Not found', { status: 404 })
+
+    return new Response(null, {
+      status: 302,
+      headers: {
+        Location: url,
+        'Cache-Control': 'public, max-age=86400',
+        'X-Content-Type-Options': 'nosniff',
+      },
+    })
+  }
+
+  const data = await storage.get(key)
   if (!data) return new Response('Not found', { status: 404 })
 
   return new Response(new Uint8Array(data), {

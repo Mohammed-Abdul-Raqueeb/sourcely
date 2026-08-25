@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
@@ -252,5 +252,58 @@ describe('storage round trip', () => {
   it('returns null rather than reading outside the upload root', async () => {
     const { getUploadStorage } = await import('@/server/uploads/storage')
     expect(await getUploadStorage().get('../../../package.json')).toBeNull()
+  })
+})
+
+describe('storage driver selection', () => {
+  // Selection is read from the environment once and cached, so each case needs
+  // a fresh module registry as well as its own environment.
+  afterEach(() => {
+    vi.unstubAllEnvs()
+    vi.resetModules()
+  })
+
+  async function fresh() {
+    vi.resetModules()
+    return import('@/server/uploads/storage')
+  }
+
+  it('defaults to the local driver with nothing configured', async () => {
+    vi.stubEnv('UPLOAD_DRIVER', '')
+    vi.stubEnv('BLOB_READ_WRITE_TOKEN', '')
+    const storage = await fresh()
+    expect(storage.resolveUploadDriver()).toBe('local')
+    // The local driver has no public surface — the media route streams bytes.
+    expect(storage.getUploadStorage().publicUrl).toBeUndefined()
+  })
+
+  it('selects blob when the token is present', async () => {
+    vi.stubEnv('UPLOAD_DRIVER', '')
+    vi.stubEnv('BLOB_READ_WRITE_TOKEN', 'vercel_blob_rw_test_0000')
+    const storage = await fresh()
+    expect(storage.resolveUploadDriver()).toBe('blob')
+    expect(typeof storage.getUploadStorage().publicUrl).toBe('function')
+  })
+
+  it('lets an explicit UPLOAD_DRIVER=local override a configured token', async () => {
+    vi.stubEnv('UPLOAD_DRIVER', 'local')
+    vi.stubEnv('BLOB_READ_WRITE_TOKEN', 'vercel_blob_rw_test_0000')
+    const storage = await fresh()
+    expect(storage.resolveUploadDriver()).toBe('local')
+  })
+
+  it('refuses UPLOAD_DRIVER=blob without a token, naming the variable', async () => {
+    vi.stubEnv('UPLOAD_DRIVER', 'blob')
+    vi.stubEnv('BLOB_READ_WRITE_TOKEN', '')
+    const storage = await fresh()
+    expect(() => storage.getUploadStorage()).toThrow(/BLOB_READ_WRITE_TOKEN/)
+  })
+
+  it('refuses the local driver on Vercel, where the filesystem is ephemeral', async () => {
+    vi.stubEnv('UPLOAD_DRIVER', '')
+    vi.stubEnv('BLOB_READ_WRITE_TOKEN', '')
+    vi.stubEnv('VERCEL', '1')
+    const storage = await fresh()
+    expect(() => storage.getUploadStorage()).toThrow(/ephemeral/)
   })
 })

@@ -43,6 +43,16 @@ export function resolveDriver(): DataDriver {
  * several layers away from the configuration that is actually wrong.
  */
 function assertConfigured(driver: DataDriver): void {
+  // A Vercel function's filesystem is ephemeral and per-instance: the memory
+  // driver would seed itself fresh on every cold start and silently lose every
+  // write — registrations, RFQs, sessions. Refusing to boot beats that.
+  if (driver === 'memory' && process.env.VERCEL) {
+    throw new Error(
+      'DATA_DRIVER=memory cannot run on Vercel — the function filesystem is ephemeral, ' +
+        'so every write would be lost. Set DATA_DRIVER=postgres and DATABASE_URL in the ' +
+        'Vercel project environment (see DEPLOY-VERCEL.md).'
+    )
+  }
   if (driver === 'postgres' && !process.env.DATABASE_URL) {
     throw new Error(
       'DATA_DRIVER=postgres requires DATABASE_URL. Start the bundled database with ' +
