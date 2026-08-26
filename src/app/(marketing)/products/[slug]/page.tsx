@@ -12,6 +12,7 @@ import {
   Timer,
 } from 'lucide-react'
 import { getCatalogRepository } from '@/server/repositories'
+import { cachedProductBySlug, cachedRelatedProducts } from '@/server/catalog/cached-search'
 import { groupedSpecs, highlightSpecs, specLabel } from '@/server/catalog/highlights'
 import { parseIntentOffline } from '@/server/ai/intent-offline'
 import { applicationLabel, industryLabel } from '@/server/catalog/spec-registry'
@@ -32,6 +33,7 @@ import { MatchExplanationPanel } from '@/components/ui/match-score'
 import { ProductGallery } from '@/components/catalog/product-gallery'
 import { ProductDetailActions } from '@/components/catalog/product-detail-actions'
 import { ProductCard } from '@/components/catalog/product-card'
+import { ViewTracker } from '@/components/catalog/view-tracker'
 
 /**
  * Product detail.
@@ -54,7 +56,7 @@ export async function generateMetadata({
   params: Promise<{ slug: string }>
 }): Promise<Metadata> {
   const { slug } = await params
-  const product = await getCatalogRepository().findBySlug(slug)
+  const product = await cachedProductBySlug(slug)
   if (!product) return { title: 'Product not found' }
 
   return {
@@ -79,13 +81,14 @@ export default async function ProductPage({
   const { slug } = await params
   const { q } = await searchParams
 
-  const repository = getCatalogRepository()
-  const product = await repository.findBySlug(slug)
+  const product = await cachedProductBySlug(slug)
   if (!product) notFound()
 
   const [related, explained] = await Promise.all([
-    repository.related(product.id, 4),
-    q ? repository.explain(product.id, parseIntentOffline(q)) : Promise.resolve(null),
+    cachedRelatedProducts(product.id, 4),
+    q
+      ? getCatalogRepository().explain(product.id, parseIntentOffline(q))
+      : Promise.resolve(null),
   ])
 
   const groups = groupedSpecs(product)
@@ -94,6 +97,7 @@ export default async function ProductPage({
 
   return (
     <div className="container-page py-8 lg:py-12">
+      <ViewTracker productId={product.id} />
       {/* Breadcrumb -------------------------------------------------------- */}
       <nav aria-label="Breadcrumb" className="mb-6">
         <ol className="flex flex-wrap items-center gap-1.5 text-[13px] text-muted">

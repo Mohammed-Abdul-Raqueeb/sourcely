@@ -2,7 +2,7 @@ import 'server-only'
 import type { Rfq, SearchEvent, User } from '@/lib/domain/account'
 import type { Brand, Category, Product, Seller } from '@/lib/domain/catalog'
 import { RFQ_STATUS_LABELS } from '@/lib/domain/account'
-import { specEnumLabel } from '@/server/catalog/spec-registry'
+import { applicationLabel } from '@/server/catalog/spec-registry'
 import { toCsv, type CsvColumn } from './csv'
 
 /**
@@ -84,7 +84,10 @@ const productColumns: CsvColumn<ProductRow>[] = [
   },
   {
     header: 'Applications',
-    value: (r) => r.product.applications.map((key) => specEnumLabel('application', key)).join('; '),
+    // `applicationLabel`, not `specEnumLabel('application', …)`: there is no
+    // spec definition named "application", so that lookup returned every raw
+    // snake_case key into the CSV.
+    value: (r) => r.product.applications.map(applicationLabel).join('; '),
   },
   { header: 'Views', value: (r) => r.product.metrics.views },
   { header: 'RFQs', value: (r) => r.product.metrics.rfqs },

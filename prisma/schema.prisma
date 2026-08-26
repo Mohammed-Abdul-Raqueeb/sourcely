@@ -16,7 +16,11 @@
 generator client {
   provider        = "prisma-client-js"
   output          = "../node_modules/.prisma/client"
-  previewFeatures = ["postgresqlExtensions"]
+  // relationJoins: lets hot read paths pass `relationLoadStrategy: 'join'` so a
+  // product with its 8 relations is one SQL statement instead of nine. On a
+  // same-host database the difference is noise; across a serverless function →
+  // managed-Postgres network hop it is the difference between 200ms and 7s.
+  previewFeatures = ["postgresqlExtensions", "relationJoins"]
 }
 
 datasource db {

@@ -40,16 +40,26 @@ export const getSession = cache(async (): Promise<ActiveSession | null> => {
   if (!claims) return null
 
   const accounts = getAccountRepository()
-  const session = await accounts.findActiveSession(claims.sid)
+  // The user is read rather than trusted from the token's copy of name and
+  // role: a role change or a rename must take effect on the next request, not
+  // when the token expires three days later. Both ids come from the verified
+  // token, so the two lookups are independent — issued in parallel they cost
+  // one database round-trip of latency instead of two, on every single
+  // authenticated request. Both results are still validated below; nothing
+  // about the check itself is relaxed.
+  const [session, user] = await Promise.all([
+    accounts.findActiveSession(claims.sid),
+    accounts.findUserById(claims.sub),
+  ])
   if (!session || session.userId !== claims.sub) return null
-
-  // Read the user rather than trusting the token's copy of name and role: a
-  // role change or a rename must take effect on the next request, not when
-  // the token expires three days later.
-  const user = await accounts.findUserById(claims.sub)
   if (!user) return null
 
-  void accounts.touchUser(user.id)
+  // Activity tracking needs "active this week", not "active this second" — so
+  // the write is skipped while the stored timestamp is fresh, sparing a
+  // database write on almost every request.
+  if (Date.now() - new Date(user.lastActiveAt).getTime() > 5 * 60_000) {
+    void accounts.touchUser(user.id)
+  }
 
   return {
     sessionId: session.id,
