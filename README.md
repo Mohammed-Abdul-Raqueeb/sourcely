@@ -21,14 +21,11 @@ natural-language parser all run in-process — see [ARCHITECTURE.md](./ARCHITECT
 sections 3.4 and 5.2 for why that is a deliberate design property and not a
 placeholder.
 
-**Sign in with the demo account.** It is pre-seeded with a shortlist, search
-history, two quotation requests and notifications, so the dashboard is
-populated on first load. The credentials are printed on the sign-in page too.
+## Demo Accounts
 
-| Role | Email | Password |
-|---|---|---|
-| Buyer | `buyer@deccanprojects.in` | `Sourcely2026` |
-| Admin | `admin@sourcely.in` | `Sourcely2026` |
+Demo account credentials are not published in this repository.
+
+For demo access, contact the repository owner.
 
 ### Checks
 
