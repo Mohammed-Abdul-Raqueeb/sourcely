@@ -2,7 +2,7 @@
 
 import { revalidatePath } from 'next/cache'
 import { getActivityRepository, getCatalogRepository } from '@/server/repositories'
-import { getSession, requireUser } from '@/server/auth/session'
+import { getSession, getVisitorId, requireUser } from '@/server/auth/session'
 
 /**
  * Buyer activity server actions.
@@ -173,18 +173,23 @@ export async function markAllNotificationsReadAction(): Promise<void> {
 /**
  * Records that a product page was opened.
  *
- * Fired from the client after paint rather than during render: a server
- * component cannot write, and doing it inline would make every product page
- * uncacheable for the sake of an analytics row.
+ * Fired from the client after paint (see `ViewTracker` on the product page)
+ * rather than during render: a server component cannot write, and the product
+ * page is statically prerendered — code in its render never runs per-request
+ * in production. An action invoked from the browser runs at request time
+ * regardless of how the page's HTML was produced.
+ *
+ * The visitor id is resolved here, not passed in: the cookie is httpOnly by
+ * design, so the browser cannot read it — and an id supplied by the client
+ * would be attacker-chosen anyway.
  */
-export async function recordViewAction(productId: string, visitorId: string): Promise<void> {
-  const session = await getSession()
-  const product = await getCatalogRepository().findById(productId)
+export async function recordViewAction(productId: string): Promise<void> {
+  const [session, visitorId, product] = await Promise.all([
+    getSession(),
+    getVisitorId(),
+    getCatalogRepository().findById(productId),
+  ])
   if (!product) return
 
-  await getActivityRepository().recordView(
-    session?.user.id ?? null,
-    visitorId || 'anonymous',
-    productId
-  )
+  await getActivityRepository().recordView(session?.user.id ?? null, visitorId, productId)
 }

@@ -829,3 +829,15 @@ export const INDUSTRY_BY_KEY: ReadonlyMap<string, ApplicationDefinition> = new M
 export function industryLabel(key: string): string {
   return INDUSTRY_BY_KEY.get(key)?.label ?? key
 }
+
+/**
+ * Label for a key that may belong to either taxonomy.
+ *
+ * Intent matching mixes `applications` and `industries` into one candidate
+ * set, so any surface that renders those hits must resolve against both maps —
+ * resolving industries through `applicationLabel` alone is how a buyer ends up
+ * reading "commercial_building".
+ */
+export function applicationOrIndustryLabel(key: string): string {
+  return APPLICATION_BY_KEY.get(key)?.label ?? INDUSTRY_BY_KEY.get(key)?.label ?? key
+}

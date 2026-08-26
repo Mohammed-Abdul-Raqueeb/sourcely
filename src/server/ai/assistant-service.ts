@@ -6,6 +6,7 @@ import type {
   SearchIntent,
 } from '@/lib/domain/search'
 import { getActivityRepository, getCatalogRepository } from '@/server/repositories'
+import { getSpecDefinition, specEnumLabel } from '@/server/catalog/spec-registry'
 import { intentToChips, removeChip } from './chips'
 import { applyFollowUp, buildFollowUp } from './follow-up'
 import { getAiProvider } from './provider'
@@ -66,10 +67,17 @@ function describeAction(action: AssistantAction, intent: SearchIntent | null): s
   switch (action.kind) {
     case 'ask':
       return action.query
-    case 'answer':
-      return action.value.includes(':')
-        ? `${action.field.replace(/_/g, ' ')}: ${action.value.replace(':', ' to ')}`
-        : action.value.replace(/_/g, ' ')
+    case 'answer': {
+      // Registry labels, not underscore-stripping: the transcript should say
+      // "Stainless Steel 316", the way every other surface does — falling back
+      // to the stripped raw value only for a key the registry does not know.
+      const fieldLabel = getSpecDefinition(action.field)?.label ?? action.field.replace(/_/g, ' ')
+      if (action.value.includes(':')) {
+        return `${fieldLabel}: ${action.value.replace(':', ' to ')}`
+      }
+      const valueLabel = specEnumLabel(action.field, action.value)
+      return valueLabel === action.value ? action.value.replace(/_/g, ' ') : valueLabel
+    }
     case 'remove-chip': {
       const chip = intent ? intentToChips(intent).find((entry) => entry.id === action.chipId) : null
       // "Not stainless steel" would be wrong: dropping a filter widens the

@@ -197,6 +197,44 @@ describe('PostgreSQL catalogue driver', () => {
     const firstIds = new Set(first.items.map((item) => item.id))
     expect(second.items.every((item) => !firstIds.has(item.id))).toBe(true)
   })
+
+  when()('matches multi-word keyword searches term by term', async () => {
+    /**
+     * The regression this pins down: the text filter matched the WHOLE query
+     * string as one substring, so "ball valve ss316" returned nothing even
+     * though "ball valve" lives in product names and "SS316" in their specs.
+     * Each term must be free to match a different field.
+     */
+    const queries = [
+      'ball valve ss316',
+      'ball valve',
+      'ss316',
+      'control valve',
+      'HVAC',
+      'electrical',
+      'plumbing',
+    ]
+
+    for (const text of queries) {
+      const [a, b] = await Promise.all([
+        pg.search({ text, limit: 96 }),
+        memory.search({ text, limit: 96 }),
+      ])
+      expect(a.total, `postgres found nothing for "${text}"`).toBeGreaterThan(0)
+      expect(b.total, `memory found nothing for "${text}"`).toBeGreaterThan(0)
+    }
+  })
+
+  when()('ranks an SS316 ball valve first for "ball valve ss316"', async () => {
+    const page = await pg.search({ text: 'ball valve ss316', limit: 24 })
+    const top = page.items[0]
+    expect(top).toBeDefined()
+    expect(top?.name.toLowerCase()).toContain('ball valve')
+    expect(
+      top?.name.toLowerCase().includes('ss316') ||
+        top?.specs.some((s) => s.displayValue.toLowerCase().includes('ss316'))
+    ).toBe(true)
+  })
 })
 
 describe('PostgreSQL writes', () => {
@@ -418,6 +456,14 @@ describe('PostgreSQL activity scoping', () => {
     const recent = await activity.recentlyViewed(mine, 10)
     expect(recent).toHaveLength(2)
     expect(recent[0]).toBe('prod_tru-pg-100')
+
+    // And back again. A re-view must return to the front even when every
+    // write lands within one millisecond — the old upsert kept the original
+    // row id and mixed two clocks for `viewedAt`, so this exact sequence
+    // failed intermittently on timestamp ties.
+    await activity.recordView(mine, 'v1', 'prod_afx-fcu-600')
+    const flipped = await activity.recentlyViewed(mine, 10)
+    expect(flipped).toEqual(['prod_afx-fcu-600', 'prod_tru-pg-100'])
   })
 
   when()('refuses to delete another user’s saved search', async () => {

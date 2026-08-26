@@ -7,7 +7,7 @@ import type {
   SearchIntent,
 } from '@/lib/domain/search'
 import { formatPrice, pluralize } from '@/lib/format'
-import { applicationLabel } from '@/server/catalog/spec-registry'
+import { applicationLabel, getSpecDefinition } from '@/server/catalog/spec-registry'
 import {
   conversationalReply,
   isStructureless,
@@ -227,7 +227,7 @@ function offlineComparison(products: ProductView[]): string {
   } else {
     const readable = differing
       .slice(0, 3)
-      .map((key) => key.replace(/_/g, ' '))
+      .map((key) => getSpecDefinition(key)?.label ?? key.replace(/_/g, ' '))
       .join(', ')
     parts.push(`They differ on ${readable}.`)
   }

@@ -9,7 +9,7 @@ import type {
 } from '@/lib/domain/search'
 import { formatPrice, formatPriceBand } from '@/lib/format'
 import {
-  applicationLabel,
+  applicationOrIndustryLabel,
   getSpecDefinition,
   specEnumLabel,
 } from './spec-registry'
@@ -305,8 +305,12 @@ function scoreApplicationFit(
   const hits = requestedApplications.filter((application) => productSet.has(application))
   const raw = hits.length / requestedApplications.length
 
-  const requested = intent.applications.map(applicationLabel).join(', ') || 'stated use'
-  const matched = hits.map(applicationLabel).join(', ')
+  // Hits mix both taxonomies, so both label maps apply — and the "requested"
+  // line must name industry asks too, or an industry-only query reads as the
+  // vague "stated use".
+  const requested =
+    requestedApplications.map(applicationOrIndustryLabel).join(', ') || 'stated use'
+  const matched = hits.map(applicationOrIndustryLabel).join(', ')
 
   return {
     raw,
@@ -314,7 +318,8 @@ function scoreApplicationFit(
       key: 'application',
       label: 'Application',
       requested,
-      actual: matched || product.applications.map(applicationLabel).join(', ') || null,
+      actual:
+        matched || product.applications.map(applicationOrIndustryLabel).join(', ') || null,
       status: raw >= 0.99 ? 'match' : raw > 0 ? 'partial' : 'miss',
     },
   }

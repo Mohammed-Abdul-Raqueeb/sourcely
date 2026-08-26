@@ -144,19 +144,28 @@ function buildWhere(query: CatalogQuery): Prisma.ProductWhereInput {
   }
 
   if (query.text?.trim()) {
-    const needle = query.text.trim()
-    // Postgres full-text lives behind a generated tsvector column added by
-    // migration SQL; this is the portable predicate that works before it, and
-    // the ranking pass below reorders whatever it returns.
-    and.push({
-      OR: [
-        { name: { contains: needle, mode: 'insensitive' } },
-        { sku: { contains: needle, mode: 'insensitive' } },
-        { tags: { hasSome: [needle.toLowerCase()] } },
-        { shortDescription: { contains: needle, mode: 'insensitive' } },
-        { specs: { some: { displayValue: { contains: needle, mode: 'insensitive' } } } },
-      ],
-    })
+    // One AND-ed clause per term, each term free to match a different field.
+    // Matching the whole phrase as a single substring is the classic bug this
+    // replaces: "ball valve ss316" matched nothing because no single column
+    // contains that exact run of characters, even though "ball valve" lives in
+    // the name and "SS316" in a spec. Terms are capped and passed as Prisma
+    // parameters, so a hostile query can neither explode the plan nor inject.
+    // The ranking pass below still reorders whatever this returns.
+    const terms = query.text.trim().split(/\s+/).filter(Boolean).slice(0, 8)
+    for (const term of terms) {
+      and.push({
+        OR: [
+          { name: { contains: term, mode: 'insensitive' } },
+          { sku: { contains: term, mode: 'insensitive' } },
+          { tags: { hasSome: [term.toLowerCase()] } },
+          { shortDescription: { contains: term, mode: 'insensitive' } },
+          { specs: { some: { displayValue: { contains: term, mode: 'insensitive' } } } },
+          { brand: { name: { contains: term, mode: 'insensitive' } } },
+          { category: { name: { contains: term, mode: 'insensitive' } } },
+          { subcategory: { name: { contains: term, mode: 'insensitive' } } },
+        ],
+      })
+    }
   }
 
   return { AND: and }

@@ -3,7 +3,7 @@ import Link from 'next/link'
 import { ChevronRight, Sparkles } from 'lucide-react'
 import { parseCatalogParams, type RawSearchParams } from '@/lib/catalog-params'
 import { pluralize } from '@/lib/format'
-import { getCatalogRepository } from '@/server/repositories'
+import { cachedCatalogSearch } from '@/server/catalog/cached-search'
 import { highlightSpecs } from '@/server/catalog/highlights'
 import { ProductCard, ProductRow } from '@/components/catalog/product-card'
 import { FilterPanel } from '@/components/catalog/filter-panel'
@@ -42,8 +42,7 @@ export default async function ProductsPage({
     ? Math.min(PAGE_CAP, Math.max(PAGE_SIZE, requested))
     : PAGE_SIZE
 
-  const repository = getCatalogRepository()
-  const page = await repository.search({ ...params, limit })
+  const page = await cachedCatalogSearch({ ...params, limit })
 
   const cards = page.items.map((product) => ({
     product,

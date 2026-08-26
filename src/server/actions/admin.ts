@@ -1,6 +1,7 @@
 'use server'
 
-import { revalidatePath } from 'next/cache'
+import { revalidatePath, revalidateTag } from 'next/cache'
+import { CATALOG_TAG } from '@/server/catalog/cached-search'
 import { redirect } from 'next/navigation'
 import { headers } from 'next/headers'
 import type { Product, ProductImage, ProductSpec } from '@/lib/domain/catalog'
@@ -349,6 +350,8 @@ export async function saveProductAction(
 
   // The catalogue is statically generated, so an edit has to invalidate the
   // pages that render it or the change is invisible until the next deploy.
+  // The tag flushes the cached /products search results the same way.
+  revalidateTag(CATALOG_TAG)
   revalidatePath('/products')
   revalidatePath(`/products/${product.slug}`)
   revalidatePath('/categories', 'layout')
@@ -380,6 +383,7 @@ export async function setProductStatusAction(
     changes: before ? { status: { from: before.status, to: status } } : null,
   })
 
+  revalidateTag(CATALOG_TAG)
   revalidatePath('/products')
   revalidatePath(`/products/${updated.slug}`)
   revalidatePath('/admin/products')

@@ -122,20 +122,22 @@ export class PrismaActivityRepository implements ActivityRepository {
     visitorId: string,
     productId: string
   ): Promise<void> {
-    if (userId) {
-      await prisma.productViewEvent.upsert({
-        where: { userId_productId: { userId, productId } },
-        create: { userId, visitorId, productId },
-        update: { viewedAt: new Date(), visitorId },
-      })
-    } else {
-      // Anonymous visitors have no unique constraint to upsert against, so
-      // replace by hand to keep one row per product per visitor.
-      await prisma.productViewEvent.deleteMany({
-        where: { userId: null, visitorId, productId },
-      })
-      await prisma.productViewEvent.create({ data: { visitorId, productId } })
-    }
+    // Replace rather than upsert, for both identities. An upsert keeps the
+    // original row id, and `viewedAt` came from two different clocks (the
+    // database default on create, the application clock on update) — so a
+    // re-viewed product could sort *behind* an untouched one whenever the
+    // timestamps tied or the clocks disagreed. A fresh row takes both its
+    // timestamp and its monotonic cuid from a single source, which makes
+    // `viewedAt desc, id desc` agree with true recency even within one
+    // millisecond. The unique(userId, productId) race under two simultaneous
+    // views of one product is swallowed: losing one duplicate view record is
+    // the correct outcome, not an error.
+    await prisma.productViewEvent.deleteMany({
+      where: userId ? { userId, productId } : { userId: null, visitorId, productId },
+    })
+    await prisma.productViewEvent
+      .create({ data: { userId, visitorId, productId } })
+      .catch(() => {})
 
     void prisma.product
       .update({ where: { id: productId }, data: { viewCount: { increment: 1 } } })

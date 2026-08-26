@@ -10,6 +10,7 @@ import {
   useState,
   type ReactNode,
 } from 'react'
+import { usePathname } from 'next/navigation'
 import { toggleSavedAction } from '@/server/actions/account'
 import { MAX_COMPARE } from '@/lib/compare'
 import type { Role } from '@/lib/domain/account'
@@ -110,26 +111,51 @@ export function ShortlistProvider({ children }: { children: ReactNode }) {
     setReady(true)
   }, [])
 
-  // Then reconcile against the server. Aborted on unmount so a fast navigation
-  // does not set state on a dead component.
+  // Then reconcile against the server — on mount, on every route change, and
+  // whenever the tab becomes visible again. The provider outlives client-side
+  // navigations, so a one-shot fetch would freeze whatever identity it caught
+  // first: sign out, and the header keeps greeting the previous user until a
+  // hard reload. The endpoint is `no-store` and the payload is tiny, so the
+  // refetch is cheap and never stale.
+  const pathname = usePathname()
   useEffect(() => {
     const controller = new AbortController()
 
-    fetch('/api/account/shortlist', { signal: controller.signal })
-      .then((response) => (response.ok ? response.json() : null))
-      .then((payload: { saved: string[] | null; user?: SessionIdentity | null } | null) => {
-        if (!payload || payload.saved === null) return
-        setSynced(true)
-        if (payload.user) setUser(payload.user)
-        setSaved(payload.saved)
-        write(SAVED_KEY, payload.saved)
-      })
-      .catch(() => {
-        // Offline or signed out — the local shortlist stands.
-      })
+    function reconcile() {
+      fetch('/api/account/shortlist', { signal: controller.signal })
+        .then((response) => (response.ok ? response.json() : null))
+        .then((payload: { saved: string[] | null; user?: SessionIdentity | null } | null) => {
+          if (!payload) return
+          // Identity is authoritative on every response: a signed-out payload
+          // must CLEAR the header, not be ignored. The old early-return above
+          // the assignment was the bug that made a logged-out session keep
+          // its previous name.
+          setUser(payload.user ?? null)
+          if (payload.saved === null) {
+            setSynced(false)
+            return
+          }
+          setSynced(true)
+          setSaved(payload.saved)
+          write(SAVED_KEY, payload.saved)
+        })
+        .catch(() => {
+          // Offline — the local shortlist stands.
+        })
+    }
 
-    return () => controller.abort()
-  }, [])
+    reconcile()
+
+    function onVisible() {
+      if (document.visibilityState === 'visible') reconcile()
+    }
+    document.addEventListener('visibilitychange', onVisible)
+
+    return () => {
+      document.removeEventListener('visibilitychange', onVisible)
+      controller.abort()
+    }
+  }, [pathname])
 
   // Keep multiple tabs consistent — a shortlist that disagrees with itself
   // across two tabs is a bug the user will notice before we do.
