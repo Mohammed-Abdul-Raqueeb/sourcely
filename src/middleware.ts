@@ -79,7 +79,15 @@ export async function middleware(request: NextRequest) {
   if (claims && matchesPrefix(pathname, ADMIN_PREFIXES)) {
     if (ROLE_RANK[claims.role] < ROLE_RANK.staff) {
       // 404 rather than 403: confirming the admin area exists is a hint.
-      return decorate(request, NextResponse.rewrite(new URL('/404', request.url), pass), policy)
+      //
+      // The rewrite serves the prerendered 404 shell, whose content arrives
+      // through inline scripts that carry no nonce — they were stamped at
+      // build time. Sending the /admin nonce policy with that shell blocks
+      // every one of them and the visitor gets a blank white page. So this
+      // response carries the same static-page policy the 404 gets everywhere
+      // else; nothing privileged renders under it.
+      const staticPolicy = contentSecurityPolicy(null, isHttps)
+      return decorate(request, NextResponse.rewrite(new URL('/404', request.url)), staticPolicy)
     }
   }
 
