@@ -367,4 +367,4 @@ What genuinely remains:
   and each page says so on its face.
 - **Pricing plan figures** on `/pricing` are the platform's own list pricing —
   a product decision, and the one set of numbers on the public site that is
-  written rather than computed.
+  written rather than computed..
